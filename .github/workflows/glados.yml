@@ -17,9 +17,9 @@ jobs:
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v3
-      - name: Add random delay (0-60 minutes)
+      - name: Add random delay (0-3 minutes)
         run: |
-          $delay = Get-Random -Minimum 0 -Maximum 3600
+          $delay = Get-Random -Minimum 0 -Maximum 181
           Write-Host "Waiting for $delay seconds before execution"
           Start-Sleep -Seconds $delay
         shell: powershell
