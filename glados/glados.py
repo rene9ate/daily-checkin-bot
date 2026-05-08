@@ -18,17 +18,21 @@ def get_driver_version():
         cmd = r'''/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --version'''
     elif system == "Windows":
         cmd = r'''powershell -command "&{(Get-Item 'C:\Program Files\Google\Chrome\Application\chrome.exe').VersionInfo.ProductVersion}"'''
+    else:
+        cmd = "google-chrome --version"
 
     try:
         out, err = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
     except IndexError as e:
         print('Check chrome version failed:{}'.format(e))
         return 0
-   
-    if system == "Darwin":
-        out = out.decode("utf-8").split(" ")[2].split(".")[0]
-    elif system == "Windows":
-        out = out.decode("utf-8").split(".")[0]
+
+    text = out.decode("utf-8").strip()
+    if system == "Windows":
+        out = text.split(".")[0]
+    else:
+        # Darwin / Linux: "Google Chrome 131.0.6778.264 ..."
+        out = text.split(" ")[2].split(".")[0]
 
     return out
 
@@ -66,7 +70,11 @@ def glados_status(driver):
 def glados(cookie_string):
     options = uc.ChromeOptions()
     options.add_argument("--disable-popup-blocking")
-      
+    if platform.system() == "Linux":
+        options.add_argument("--headless=new")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+
     version = get_driver_version()
     driver = uc.Chrome(version_main = int(version), options = options)
 

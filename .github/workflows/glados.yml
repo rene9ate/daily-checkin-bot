@@ -1,35 +1,48 @@
 name: glados
 
+# New workflow runs cancel any still-running run for the same ref (latest wins).
+# Uncomment push below if you want check-in on every push to main.
 on:
-  # Triggers the workflow on push or pull request events but only for the main branch
-  #push:
-  #  branches: [ main ]
-  #pull_request:
-  #  branches: [ main ]
-
   schedule:
-  - cron: "30 16 * * *"
-  
+    - cron: "30 16 * * *"
   workflow_dispatch:
+  # push:
+  #   branches: [ main ]
+
+concurrency:
+  group: glados-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
-    runs-on: windows-2025
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - name: Add random delay (0-3 minutes)
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Add random delay (0-30 seconds)
         run: |
-          $delay = Get-Random -Minimum 0 -Maximum 181
-          Write-Host "Waiting for $delay seconds before execution"
-          Start-Sleep -Seconds $delay
-        shell: powershell
+          delay=$((RANDOM % 31))
+          echo "Waiting for ${delay}s"
+          sleep "$delay"
+
+      - uses: browser-actions/setup-chrome@v1
+        with:
+          install-chromedriver: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: glados/requirements.txt
+
       - name: Install requirements
-        run: |
-          pip3 install -r ./glados/requirements.txt
+        run: pip install -r ./glados/requirements.txt
+
       - name: Run checkin
-        run: |
-          python3 ./glados/main.py --cookie_string "${{ secrets.GLADOS_COOKIE }}"
-        env: 
+        run: python ./glados/main.py --cookie_string "${{ secrets.GLADOS_COOKIE }}"
+        env:
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
           SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
           WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK }}
