@@ -84,9 +84,6 @@ def glados(cookie_string):
         print(f"Failed to get new status: {e}")
         left_days = old_left_days
 
-    result_code = 0
-    if left_days != old_left_days + 1 and "Got" not in checkin_message:
-        result_code = 2
-
+    result_code = 0 if checkin_code == 0 else 2
     message = f"【Status】Left days:{left_days}"
     return result_code, message
