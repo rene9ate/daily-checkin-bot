@@ -63,6 +63,7 @@ def glados(cookie_string):
         checkin_code = checkin_json.get("code", -1)
         checkin_message = checkin_json.get("message", "")
         print(f"【Checkin】{checkin_message}")
+        print(f"【Debug】API checkin response: {checkin_json}")
     except Exception as e:
         print(f"Failed to checkin: {e}")
         return 2, "Check-in network error."
@@ -84,6 +85,6 @@ def glados(cookie_string):
         print(f"Failed to get new status: {e}")
         left_days = old_left_days
 
-    result_code = 0 if checkin_code == 0 else 2
+    result_code = 0 if checkin_code != -2 else -2
     message = f"【Status】Left days:{left_days}"
     return result_code, message
