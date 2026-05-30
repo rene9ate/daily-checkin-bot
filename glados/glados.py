@@ -1,142 +1,92 @@
 # encoding=utf8
 import io
 import sys
-import json
-import platform
-import subprocess
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer,encoding='utf-8')
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
-import undetected_chromedriver as uc
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.remote.webdriver import By
 
-def get_driver_version():
-    system = platform.system()
-
-    if system == "Darwin":
-        cmd = r'''/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --version'''
-    elif system == "Windows":
-        cmd = r'''powershell -command "&{(Get-Item 'C:\Program Files\Google\Chrome\Application\chrome.exe').VersionInfo.ProductVersion}"'''
-    else:
-        cmd = "google-chrome --version"
-
+def create_session():
     try:
-        out, err = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
-    except IndexError as e:
-        print('Check chrome version failed:{}'.format(e))
-        return 0
+        import cloudscraper
+        return cloudscraper.create_scraper()
+    except ImportError:
+        import requests
+        session = requests.Session()
+        session.headers.update({
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/131.0.0.0 Safari/537.36"
+            )
+        })
+        return session
 
-    text = out.decode("utf-8").strip()
-    if system == "Windows":
-        out = text.split(".")[0]
-    else:
-        # Darwin / Linux: "Google Chrome 131.0.6778.264 ..."
-        out = text.split(" ")[2].split(".")[0]
 
-    return out
-
-def glados_checkin(driver):
-    checkin_url = "https://glados.cloud/api/user/checkin"
-    checkin_query = """
-        (function (){
-        var request = new XMLHttpRequest();
-        request.open("POST","%s",false);
-        request.setRequestHeader('content-type', 'application/json');
-        request.send('{"token": "glados.network"}');
-        return request;
-        })();
-        """ % (checkin_url)
-    checkin_query = checkin_query.replace("\n", "")
-    resp = driver.execute_script("return " + checkin_query)
-    resp = json.loads(resp["response"])
-    return resp["code"], resp["message"]
-
-def glados_status(driver):
-    status_url = "https://glados.cloud/api/user/status"
-    status_query = """
-        (function (){
-        var request = new XMLHttpRequest();
-        request.open("GET","%s",false);
-        request.send(null);
-        return request;
-        })();
-        """ % (status_url)
-    status_query = status_query.replace("\n", "")
-    resp = driver.execute_script("return " + status_query)
-    resp = json.loads(resp["response"])
-    return resp["code"], resp["data"]
-
-def glados(cookie_string):
-    options = uc.ChromeOptions()
-    options.add_argument("--disable-popup-blocking")
-    if platform.system() == "Linux":
-        options.add_argument("--headless=new")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-
-    version = get_driver_version()
-    driver = uc.Chrome(version_main = int(version), options = options)
-
-    # Load cookie
-    driver.get("https://glados.cloud")
-      
+def parse_cookies(cookie_string):
     if cookie_string.startswith("cookie:"):
         cookie_string = cookie_string[len("cookie:"):]
-    cookie_dict = [ 
-        {"name": x[:x.find('=')].strip(), "value": x[x.find('=')+1:].strip()} 
-        for x in cookie_string.split(';')
-    ]
+    cookies = {}
+    for item in cookie_string.split(";"):
+        item = item.strip()
+        if "=" in item:
+            name, value = item.split("=", 1)
+            cookies[name.strip()] = value.strip()
+    return cookies
 
-    driver.delete_all_cookies()
-    for cookie in cookie_dict:
-        if cookie["name"] in ["koa:sess", "koa:sess.sig"]:
-            driver.add_cookie({
-                "domain": "glados.cloud",
-                "name": cookie["name"],
-                "value": cookie["value"],
-                "path": "/",
-            })
-    
-    driver.get("https://glados.cloud")
-    WebDriverWait(driver, 240).until(
-        lambda x: x.title != "Just a moment..."
-    )
-    
-    message = str()
 
-    # checkin_code, checkin_message = glados_checkin(driver)
-    # if checkin_code == -2: checkin_message = "Login fails, please check your cookie."
-    # message = f"{message}【Checkin】{checkin_message}\n"
-    # print(f"【Checkin】{checkin_message}")
-    status_code, status_data = glados_status(driver)
-    old_left_days = int(float(status_data["leftDays"]))
-    print(f"【Status】Old left days:{old_left_days}")
+def glados(cookie_string):
+    session = create_session()
+    cookies = parse_cookies(cookie_string)
 
-    driver.get("https://glados.cloud/console/checkin")
-    s_checkin_button = "//div[@class='checkin-main-grid']/div[2]/div[3]/button"
-    driver.find_element(By.XPATH, s_checkin_button).click()
-    print("【Checkin】Clicked the button")
+    # Get old status
+    try:
+        status_resp = session.get(
+            "https://glados.cloud/api/user/status",
+            cookies=cookies,
+            timeout=30,
+        )
+        status_json = status_resp.json()
+        old_left_days = int(float(status_json["data"]["leftDays"]))
+        print(f"【Status】Old left days:{old_left_days}")
+    except Exception as e:
+        print(f"Failed to get status: {e}")
+        return -2, "Login fails, please check your cookie."
 
-    s_checkin_content = "//div[@class='checkin-main-grid']/div[2]/div[3]/div[2]/span"
-    WebDriverWait(driver, 10).until(
-        EC.presence_of_element_located((By.XPATH, s_checkin_content))
-    )
-    checkin_content = driver.find_element(By.XPATH, s_checkin_content)
-    print(f"【Checkin】Message content: {checkin_content.text}")
+    # Do check-in
+    try:
+        checkin_resp = session.post(
+            "https://glados.cloud/api/user/checkin",
+            json={"token": "glados.network"},
+            cookies=cookies,
+            timeout=30,
+        )
+        checkin_json = checkin_resp.json()
+        checkin_code = checkin_json.get("code", -1)
+        checkin_message = checkin_json.get("message", "")
+        print(f"【Checkin】{checkin_message}")
+    except Exception as e:
+        print(f"Failed to checkin: {e}")
+        return 2, "Check-in network error."
 
-    checkin_code = 0
-    if checkin_code != -2:
-        status_code, status_data = glados_status(driver)
-        left_days = int(float(status_data["leftDays"]))
+    if checkin_code == -2:
+        return -2, "Login fails, please check your cookie."
+
+    # Get new status
+    try:
+        status_resp = session.get(
+            "https://glados.cloud/api/user/status",
+            cookies=cookies,
+            timeout=30,
+        )
+        status_json = status_resp.json()
+        left_days = int(float(status_json["data"]["leftDays"]))
         print(f"【Status】Left days:{left_days}")
-        message = f"{message}【Status】Left days:{left_days}\n"
+    except Exception as e:
+        print(f"Failed to get new status: {e}")
+        left_days = old_left_days
 
-        if left_days != old_left_days + 1 and (not "Got" in checkin_content.text):
-            checkin_code = 2 # checkin fail
+    result_code = 0
+    if left_days != old_left_days + 1 and "Got" not in checkin_message:
+        result_code = 2
 
-    driver.close()
-    driver.quit()
-
-    return checkin_code, message
-    
+    message = f"【Status】Left days:{left_days}"
+    return result_code, message

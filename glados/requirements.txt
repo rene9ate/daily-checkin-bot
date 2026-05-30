@@ -1,2 +1,2 @@
-undetected-chromedriver
-setuptools==80.9.0
+cloudscraper
+requests
