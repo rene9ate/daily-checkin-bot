@@ -1,13 +1,23 @@
 name: glados
 
+# 保活：距上一次提交超过该天数才产生一次心跳提交，避免日常噪音
+env:
+  HEARTBEAT_MAX_AGE_DAYS: "${{ github.event.inputs.heartbeat_days || '20' }}"
+
+# 心跳需要向仓库推送提交，故需要写权限（原为 contents: read）
 permissions:
-  contents: read
+  contents: write
 
 # concurrency: newer runs cancel in-flight runs on the same ref (latest wins).
 on:
   schedule:
     - cron: "30 16 * * *"
   workflow_dispatch:
+    inputs:
+      heartbeat_days:
+        description: "心跳阈值天数：留空用默认值，填 0 可强制立即心跳（验证保活用）"
+        required: false
+        default: ""
   push:
     branches: [main]
     paths:
@@ -50,3 +60,50 @@ jobs:
           SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
           WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK }}
           BARK_DEVICEKEY: ${{ secrets.BARK_DEVICEKEY }}
+
+      # ---------------------------------------------------------------
+      # 保活：GitHub 会在仓库连续 60 天无提交活动时停用 scheduled workflow，
+      # 而 workflow 的运行本身不算"活动"。这里让签到任务自己留下一次提交，
+      # 形成闭环，定时任务便不会因静默而被停用。
+      # 注意：由 GITHUB_TOKEN 产生的提交不会触发新的 workflow 运行，无递归风险。
+      # ---------------------------------------------------------------
+      - name: Heartbeat (保活)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          last_ts=$(git log -1 --format=%ct || echo 0)
+          now_ts=$(date +%s)
+          age=$(( (now_ts - last_ts) / 86400 ))
+          echo "距上次提交: ${age} 天（阈值 ${HEARTBEAT_MAX_AGE_DAYS} 天）"
+
+          if [ "$age" -lt "$HEARTBEAT_MAX_AGE_DAYS" ]; then
+            echo "仍在安全期内，跳过心跳提交"
+            exit 0
+          fi
+
+          mkdir -p .github
+          cat > .github/heartbeat.txt <<EOF
+          last_run: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          run_id: ${GITHUB_RUN_ID}
+          run_number: ${GITHUB_RUN_NUMBER}
+          EOF
+
+          git add .github/heartbeat.txt
+          if git diff --cached --quiet; then
+            echo "无内容变更，跳过提交"
+            exit 0
+          fi
+
+          git commit -m "chore(heartbeat): keep Actions alive (run ${GITHUB_RUN_NUMBER})"
+
+          # checkout 时 persist-credentials: false，此处显式提供推送凭据
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          # 若期间已有其他提交，先变基再推，避免 non-fast-forward 失败
+          git pull --rebase --autostash origin "${GITHUB_REF_NAME}" || true
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          echo "心跳已提交，60 天停用计时已重置"
