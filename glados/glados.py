@@ -3,22 +3,21 @@ import io
 import sys
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
+# 设备指纹统一交给 session.py 构造。
+# 原来这里直接调 cloudscraper.create_scraper()，它会从
+# ['linux','windows','darwin','android','ios'] 里随机抽一个平台当 UA，
+# 抽到 darwin 就是 macOS —— 站点会判定「签到设备和登录设备不一致」
+# （Signed-in device: Windows / Check-in client: macOS）并拒绝给分。
+from session import create_session
 
-def create_session():
-    try:
-        import cloudscraper
-        return cloudscraper.create_scraper()
-    except ImportError:
-        import requests
-        session = requests.Session()
-        session.headers.update({
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/131.0.0.0 Safari/537.36"
-            )
-        })
-        return session
+# 站点自己的风控话术。命中说明签到被拒、没有发积分，
+# 但 API 返回的 code 仍然是 0/1，原逻辑会把它当成功 ——
+# 结果是 Actions 一直是绿的，实际一分没拿到。
+RISK_CONTROL_MARKERS = (
+    "automated check-in detected",
+    "different device",
+    "sign in again",
+)
 
 
 def parse_cookies(cookie_string):
@@ -69,6 +68,16 @@ def glados(cookie_string):
 
     if checkin_code == -2:
         return -2, "Login fails, please check your cookie."
+
+    # 风控命中：站点认定签到客户端与登录设备不一致，本次不发积分。
+    # 必须当成失败返回，否则 main.py 会判定为成功、Actions 显示绿色。
+    if any(m in checkin_message.lower() for m in RISK_CONTROL_MARKERS):
+        return 3, (
+            "【风控】站点判定签到客户端与登录设备不一致，本次未发放积分。\n"
+            f"【原文】{checkin_message}\n"
+            "【处置】确认 session.py 发出的 UA 平台与登录设备一致；"
+            "必要时在浏览器里重新登录并更新 cookie。"
+        )
 
     # Get new status
     try:

@@ -4,6 +4,7 @@ import argparse
 
 from glados import glados
 from messageSender import MessageSender
+from session import strip_ip_bound_cookies
 
 if __name__ == "__main__":
 
@@ -32,6 +33,9 @@ if __name__ == "__main__":
     for idx, cookie in enumerate(cookie_string):
         print(f"【Account_{idx+1}】:")
         message_all = f"{message_all}【Account_{idx+1}】:\n"
+        # cf_clearance / __cf_bm 这类 Cloudflare cookie 和生成它的 IP 绑定，
+        # 换出口 IP 使用会被判为异常，先剔掉
+        cookie = strip_ip_bound_cookies(cookie)
         checkin_code, message = glados(cookie)
         checkin_codes.append(checkin_code)
         message_all = f"{message_all}{message}\n"
@@ -46,4 +50,9 @@ if __name__ == "__main__":
     message_sender.send_all(message_tokens= message_tokens, title = title, content = message_all)
 
     assert -2 not in checkin_codes, "At least one account login fails."
+    if 3 in checkin_codes:
+        raise AssertionError(
+            "Check-in was rejected by GLaDOS risk control "
+            "(device/client mismatch) - see 【风控】 above."
+        )
     assert checkin_codes.count(0) + checkin_codes.count(1) == len(checkin_codes), "Not all the accounts check in successful."
