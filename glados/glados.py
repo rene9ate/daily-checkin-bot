@@ -19,10 +19,27 @@ RISK_CONTROL_MARKERS = (
     "sign in again",
 )
 
+# 签到接口的返回码语义（2026-10-21 对 glados.cloud 实测）：
+#   0  本次签到成功，points 为本次获得的积分
+#   1  今天已经签过，幂等成功，points=0
+#      原文 "Today's observation logged. Return tomorrow for more points."
+#  -2  未登录 / cookie 失效（"没有权限"）
+# 其余值一律视为「无法确认签到结果」，按失败上报。
+# 注意：checkin_json.get("code", -1) 拿不到 code 时默认是 -1，
+# 旧写法 `0 if checkin_code != -2 else -2` 会把 -1 也映射成 0（成功），
+# 于是接口改版 / 返回结构异常时 Actions 变绿，实际一次都没签到。
+SUCCESS_CODES = (0, 1)
+
+# 未预期的返回码。main.py 里只有 0/1 算成功，其余都会让 job 失败。
+CODE_UNEXPECTED = 4
+
 
 def parse_cookies(cookie_string):
-    if cookie_string.startswith("cookie:"):
-        cookie_string = cookie_string[len("cookie:"):]
+    # 原写法只认小写 "cookie:"。从 DevTools「Copy as cURL」或某些导出工具
+    # 拿到的是大写 "Cookie:"，匹配不上会让第一个 cookie 的名字变成
+    # "Cookie:gld:sess"，服务端认不出来，直接回 {"code":-2,"message":"没有权限"}。
+    if cookie_string[:7].lower() == "cookie:":
+        cookie_string = cookie_string[7:]
     cookies = {}
     for item in cookie_string.split(";"):
         item = item.strip()
@@ -60,8 +77,10 @@ def glados(cookie_string):
         )
         checkin_json = checkin_resp.json()
         checkin_code = checkin_json.get("code", -1)
+        checkin_points = checkin_json.get("points", None)
         checkin_message = checkin_json.get("message", "")
         print(f"【Checkin】{checkin_message}")
+        print(f"【Checkin】code={checkin_code} points={checkin_points}")
     except Exception as e:
         print(f"Failed to checkin: {e}")
         return 2, "Check-in network error."
@@ -79,6 +98,16 @@ def glados(cookie_string):
             "必要时在浏览器里重新登录并更新 cookie。"
         )
 
+    # 只有 0 / 1 才算「确认签到成功」。其余返回码（含拿不到 code 时的 -1、
+    # 以及将来站点新增的错误码）一律上报失败，不再静默当成成功。
+    if checkin_code not in SUCCESS_CODES:
+        return CODE_UNEXPECTED, (
+            "【异常返回】签到接口返回了未预期的 code，无法确认是否发放积分。\n"
+            f"【原文】code={checkin_code} points={checkin_points} message={checkin_message}\n"
+            "【处置】多半是站点接口改版或风控换了话术，先手动登录网页确认，"
+            "再对照本文件的 SUCCESS_CODES / RISK_CONTROL_MARKERS 更新判定规则。"
+        )
+
     # Get new status
     try:
         status_resp = session.get(
@@ -93,6 +122,7 @@ def glados(cookie_string):
         print(f"Failed to get new status: {e}")
         left_days = old_left_days
 
-    result_code = 0 if checkin_code != -2 else -2
+    # 保留站点原始返回码：0 = 本次新签到并发了积分，1 = 今天已经签过。
+    # main.py 两者都认，返回原值比统一压成 0 更有信息量。
     message = f"【Status】Left days:{left_days}"
-    return result_code, message
+    return checkin_code, message
